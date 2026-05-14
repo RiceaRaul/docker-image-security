@@ -112,8 +112,7 @@ pipeline {
       }
     }
 
-    stage('Sign + Attest (Cosign)') {
-      when { branch 'main' }
+    stage('Sign + Attest (Cosign, offline)') {
       steps {
         container('cosign') {
           withCredentials([
@@ -121,33 +120,23 @@ pipeline {
             string(credentialsId: 'cosign-password', variable: 'COSIGN_PASSWORD'),
           ]) {
             sh '''
-              cosign sign   --key $COSIGN_KEY --yes ${REF}
-              cosign attest --key $COSIGN_KEY --type cyclonedx --predicate sbom.json --yes ${REF}
+              # Sign the local OCI tarball (no registry needed)
+              cosign sign-blob   --key $COSIGN_KEY --yes --tlog-upload=false image.tar > image.tar.sig
+              cosign attest-blob --key $COSIGN_KEY --yes --tlog-upload=false \
+                --predicate sbom.json --type cyclonedx image.tar > image.tar.intoto
             '''
           }
         }
       }
     }
 
-    stage('Push') {
-      when { branch 'main' }
-      steps {
-        container('buildkit') {
-          sh '''
-            buildctl --addr ${BUILDKIT_ADDR} build \
-              --frontend dockerfile.v0 \
-              --local context=. --local dockerfile=docker \
-              --output type=image,name=${REF},push=true
-          '''
-        }
-      }
-    }
-
     stage('Verify Signature') {
-      when { branch 'main' }
       steps {
         container('cosign') {
-          sh 'cosign verify --key cosign.pub ${REF}'
+          sh '''
+            cosign verify-blob --key cosign.pub --signature image.tar.sig \
+              --insecure-ignore-tlog image.tar
+          '''
         }
       }
     }
