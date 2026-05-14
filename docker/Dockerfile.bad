@@ -1,22 +1,29 @@
-# INTENTIONALLY INSECURE BASELINE — DO NOT USE IN PRODUCTION
-# Demonstrates anti-patterns scanned by hadolint / trivy / dockle.
+# INTENTIONALLY INSECURE BASELINE — DO NOT USE IN PRODUCTION.
+# Demonstrates anti-patterns that hadolint / trivy / grype flag:
+#   B1  Mutable :latest tag on base image
+#   B2  Fat base (full debian) → huge CVE surface
+#   B3  Hardcoded secret baked into image layer (visible via `docker history`)
+#   B4  Whole context COPY (leaks .git, tests, .env if present)
+#   B5  No version pin on installer tooling
+#   B6  Runs as root (no USER)
+#   B7  No HEALTHCHECK
+#   B8  Shell-form CMD
 
 FROM python:latest
 
-# B1: ENV secret bakes into image layer (visible via `docker history`)
+# B3 — secret in env, baked into the layer
 ENV API_KEY=sk-DEMO-LEAKED-abc123def456
 
 WORKDIR /app
 
-# B2: copy whole context (leaks .git, tests, .env if present)
+# B4 — copy everything
 COPY . /app
 
-# B3: install via pip without --no-cache-dir, no version pin on tooling
+# B5 — uv unpinned, then install the vulnerable pinned set from pyproject
 RUN pip install uv && uv pip install --system --no-cache .
 
-# B4: runs as root (no USER directive)
-# B5: no HEALTHCHECK
-# B6: shell form CMD, base tag is :latest (mutable)
-
+# B6 / B7 — runs as root, no HEALTHCHECK
 EXPOSE 5000
+
+# B8 — shell-form CMD
 CMD python -m app
