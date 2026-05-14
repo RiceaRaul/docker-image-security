@@ -116,10 +116,13 @@ pipeline {
                   --severity ${FAIL_SEVERITY} \
                   -f json -o reports/trivy.json
 
-                # GATE: fail if any HIGH/CRITICAL found
+                # GATE: fail if any FIXABLE HIGH/CRITICAL found
+                # (will_not_fix / no-patch CVEs are surfaced in the report
+                #  but do not break the build — those need base-image swap)
                 trivy image --input image.tar --no-progress \
                   --severity ${FAIL_SEVERITY} \
-                  --exit-code 1 --ignore-unfixed=false \
+                  --ignore-unfixed \
+                  --exit-code 1 \
                   -f table
               '''
             }
