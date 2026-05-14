@@ -171,8 +171,8 @@ pipeline {
             string(credentialsId: 'cosign-password', variable: 'COSIGN_PASSWORD'),
           ]) {
             sh '''
-              cosign sign-blob   --key $COSIGN_KEY --yes --tlog-upload=false image.tar > reports/image.tar.sig
-              cosign attest-blob --key $COSIGN_KEY --yes --tlog-upload=false \
+              cosign sign-blob   --key "$COSIGN_KEY" --yes --tlog-upload=false image.tar > reports/image.tar.sig
+              cosign attest-blob --key "$COSIGN_KEY" --yes --tlog-upload=false \
                 --predicate reports/sbom.json --type cyclonedx image.tar > reports/image.tar.intoto
             '''
           }
