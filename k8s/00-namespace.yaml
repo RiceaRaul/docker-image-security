@@ -1,12 +1,35 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: jenkins
-  labels:
-    name: jenkins
+  name: janekins-namespace
+  labels: { name: janekins-namespace }
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: jenkins-builder
-  namespace: jenkins
+  namespace: janekins-namespace
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-runner
+  namespace: janekins-namespace
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec", "pods/log"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-builder-agent
+  namespace: janekins-namespace
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-builder
+    namespace: janekins-namespace
+roleRef:
+  kind: Role
+  name: agent-runner
+  apiGroup: rbac.authorization.k8s.io
