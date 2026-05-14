@@ -24,10 +24,11 @@ sbom.txt
 trivy.txt
 hadolint-*.sarif
 
-# Cosign keys (NEVER commit)
+# Cosign private key — NEVER commit
 cosign.key
-cosign.pub
 *.pem
+# cosign.pub is intentionally tracked (used by `cosign verify`)
+!cosign.pub
 
 # LaTeX build artifacts
 document/**/*.aux
