@@ -78,7 +78,7 @@ pipeline {
               --local context=. \
               --local dockerfile=docker \
               --opt filename=${DOCKERFILE} \
-              --output type=oci,name=${REF},dest=image.tar
+              --output type=docker,name=${REF},dest=image.tar
             ls -lh image.tar
           '''
         }
@@ -89,9 +89,9 @@ pipeline {
       steps {
         container('syft') {
           sh '''
-            syft oci-archive:image.tar -o cyclonedx-json=reports/sbom.json
-            syft oci-archive:image.tar -o spdx-json=reports/sbom.spdx.json
-            syft oci-archive:image.tar -o table | tee reports/sbom.txt
+            syft docker-archive:image.tar -o cyclonedx-json=reports/sbom.json
+            syft docker-archive:image.tar -o spdx-json=reports/sbom.spdx.json
+            syft docker-archive:image.tar -o table | tee reports/sbom.txt
           '''
         }
       }
@@ -129,8 +129,8 @@ pipeline {
           steps {
             container('grype') {
               sh '''
-                grype oci-archive:image.tar -o sarif > reports/grype.sarif
-                grype oci-archive:image.tar -o table | tee reports/grype.txt
+                grype docker-archive:image.tar -o sarif > reports/grype.sarif
+                grype docker-archive:image.tar -o table | tee reports/grype.txt
               '''
             }
           }
