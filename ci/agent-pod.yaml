@@ -43,6 +43,10 @@ spec:
     # ---- Grype (alpine + install on start) ----
     - name: grype
       image: alpine:3.20
+      env:
+        # Allow stale DB (offline-friendly demo) — 1 year max age.
+        - { name: GRYPE_DB_MAX_ALLOWED_BUILT_AGE, value: "8760h" }
+        - { name: GRYPE_DB_VALIDATE_AGE,           value: "false" }
       command:
         - sh
         - -c
@@ -50,7 +54,7 @@ spec:
           set -e
           apk add --no-cache curl ca-certificates >/dev/null
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-            | sh -s -- -b /usr/local/bin v0.78.0
+            | sh -s -- -b /usr/local/bin
           grype version
           exec cat
       tty: true
