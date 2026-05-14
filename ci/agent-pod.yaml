@@ -20,6 +20,7 @@ spec:
       args:
         - --addr
         - unix:///run/buildkit/buildkitd.sock
+      tty: true
       securityContext:
         privileged: true
       readinessProbe:
@@ -27,24 +28,23 @@ spec:
           command: ["buildctl", "debug", "workers"]
         initialDelaySeconds: 5
       volumeMounts:
-        - { name: buildkitd,  mountPath: /run/buildkit }
-        - { name: workspace,  mountPath: /home/jenkins/agent }
+        - { name: buildkitd, mountPath: /run/buildkit }
 
-    # ---- Trivy (alpine — already has shell) ----
+    # ---- Trivy ----
     - name: trivy
       image: aquasec/trivy:0.50.0
-      command: ["sleep", "infinity"]
+      command: ["cat"]
+      tty: true
       env:
         - { name: TRIVY_CACHE_DIR, value: /tmp/.trivy }
       volumeMounts:
         - { name: trivy-cache, mountPath: /tmp/.trivy }
-        - { name: workspace,   mountPath: /home/jenkins/agent }
 
     # ---- Grype (chainguard -dev variant has busybox shell) ----
     - name: grype
       image: cgr.dev/chainguard/grype:latest-dev
-      command: ["sleep", "infinity"]
-      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+      command: ["cat"]
+      tty: true
 
     # ---- Syft (alpine + install on start) ----
     - name: syft
@@ -58,8 +58,8 @@ spec:
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
             | sh -s -- -b /usr/local/bin v1.5.0
           syft version
-          sleep infinity
-      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+          exec cat
+      tty: true
 
     # ---- Cosign (alpine + install on start) ----
     - name: cosign
@@ -74,22 +74,21 @@ spec:
             https://github.com/sigstore/cosign/releases/download/v2.2.4/cosign-linux-amd64
           chmod +x /usr/local/bin/cosign
           cosign version
-          sleep infinity
-      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+          exec cat
+      tty: true
 
-    # ---- Conftest (instrumenta image is alpine) ----
+    # ---- Conftest ----
     - name: conftest
       image: openpolicyagent/conftest:v0.55.0
-      command: ["sleep", "infinity"]
-      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+      command: ["cat"]
+      tty: true
 
-    # ---- Hadolint (alpine variant has shell) ----
+    # ---- Hadolint ----
     - name: hadolint
       image: hadolint/hadolint:v2.12.0-alpine
-      command: ["sleep", "infinity"]
-      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+      command: ["cat"]
+      tty: true
 
   volumes:
     - { name: buildkitd,   emptyDir: {} }
-    - { name: workspace,   emptyDir: {} }
     - { name: trivy-cache, emptyDir: {} }
