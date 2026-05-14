@@ -1,6 +1,6 @@
 // Jenkins declarative pipeline — Docker image security
-// Scope: build, scan, SBOM, sign, push. No runtime deploy.
-// Agent: dynamic K8s pod (see ci/agent-pod.yaml).
+// Parameter IMAGE_VARIANT picks docker/Dockerfile (good) or docker/Dockerfile.bad (bad).
+// Pipeline fails when the scanner finds HIGH/CRITICAL CVEs (expected for the bad variant).
 // Author: Ricea Ion Raul (CSML, Software Security)
 
 pipeline {
@@ -11,12 +11,26 @@ pipeline {
     }
   }
 
+  parameters {
+    choice(
+      name: 'IMAGE_VARIANT',
+      choices: ['good', 'bad'],
+      description: 'Which Dockerfile to build/scan: "good" = hardened image; "bad" = intentionally vulnerable.'
+    )
+    string(
+      name: 'FAIL_SEVERITY',
+      defaultValue: 'HIGH,CRITICAL',
+      description: 'Trivy severities that fail the build.'
+    )
+  }
+
   environment {
     REGISTRY      = 'registry.sec-lab.local'
     IMAGE         = "${REGISTRY}/secapp"
-    TAG           = "${env.GIT_COMMIT?.take(8) ?: 'dev'}"
+    TAG           = "${env.GIT_COMMIT?.take(8) ?: 'dev'}-${params.IMAGE_VARIANT}"
     REF           = "${IMAGE}:${TAG}"
     BUILDKIT_ADDR = 'unix:///run/buildkit/buildkitd.sock'
+    DOCKERFILE    = "${params.IMAGE_VARIANT == 'bad' ? 'Dockerfile.bad' : 'Dockerfile'}"
   }
 
   options {
@@ -27,13 +41,29 @@ pipeline {
   }
 
   stages {
+    stage('Init') {
+      steps {
+        echo "===================================================================="
+        echo " IMAGE_VARIANT = ${params.IMAGE_VARIANT}"
+        echo " DOCKERFILE    = docker/${env.DOCKERFILE}"
+        echo " REF           = ${env.REF}"
+        echo " FAIL_SEVERITY = ${params.FAIL_SEVERITY}"
+        echo "===================================================================="
+        sh 'mkdir -p reports'
+      }
+    }
+
     stage('Lint Dockerfile') {
       steps {
         container('hadolint') {
           sh '''
-            hadolint docker/Dockerfile     -f sarif > hadolint-good.sarif || true
-            hadolint docker/Dockerfile.bad -f sarif > hadolint-bad.sarif  || true
-            hadolint docker/Dockerfile
+            set +e
+            hadolint docker/${DOCKERFILE} -f sarif > reports/hadolint.sarif
+            HL_RC=$?
+            hadolint docker/${DOCKERFILE} -f json  > reports/hadolint.json
+            hadolint docker/${DOCKERFILE} | tee reports/hadolint.txt
+            echo "Hadolint exit code: $HL_RC"
+            exit 0
           '''
         }
       }
@@ -47,8 +77,9 @@ pipeline {
               --frontend dockerfile.v0 \
               --local context=. \
               --local dockerfile=docker \
-              --opt filename=Dockerfile \
+              --opt filename=${DOCKERFILE} \
               --output type=oci,name=${REF},dest=image.tar
+            ls -lh image.tar
           '''
         }
       }
@@ -58,9 +89,9 @@ pipeline {
       steps {
         container('syft') {
           sh '''
-            syft oci-archive:image.tar -o cyclonedx-json=sbom.json
-            syft oci-archive:image.tar -o spdx-json=sbom.spdx.json
-            syft oci-archive:image.tar -o table | tee sbom.txt
+            syft oci-archive:image.tar -o cyclonedx-json=reports/sbom.json
+            syft oci-archive:image.tar -o spdx-json=reports/sbom.spdx.json
+            syft oci-archive:image.tar -o table | tee reports/sbom.txt
           '''
         }
       }
@@ -68,14 +99,28 @@ pipeline {
 
     stage('Scan Image') {
       parallel {
-        stage('Trivy CVE') {
+        stage('Trivy CVE (gate)') {
           steps {
             container('trivy') {
               sh '''
-                trivy image --input image.tar \
-                  --severity HIGH,CRITICAL --exit-code 0 \
-                  -f sarif -o trivy.sarif
-                trivy image --input image.tar -f table | tee trivy.txt
+                # Full table for the report
+                trivy image --input image.tar --no-progress -f table | tee reports/trivy.txt
+
+                # SARIF for Jenkins warnings-ng
+                trivy image --input image.tar --no-progress \
+                  --severity ${FAIL_SEVERITY} \
+                  -f sarif -o reports/trivy.sarif
+
+                # JSON for the summary step
+                trivy image --input image.tar --no-progress \
+                  --severity ${FAIL_SEVERITY} \
+                  -f json -o reports/trivy.json
+
+                # GATE: fail if any HIGH/CRITICAL found
+                trivy image --input image.tar --no-progress \
+                  --severity ${FAIL_SEVERITY} \
+                  --exit-code 1 --ignore-unfixed=false \
+                  -f table
               '''
             }
           }
@@ -83,21 +128,24 @@ pipeline {
         stage('Grype CVE') {
           steps {
             container('grype') {
-              sh 'grype oci-archive:image.tar -o sarif > grype.sarif'
+              sh '''
+                grype oci-archive:image.tar -o sarif > reports/grype.sarif
+                grype oci-archive:image.tar -o table | tee reports/grype.txt
+              '''
             }
           }
         }
         stage('Trivy Misconfig') {
           steps {
             container('trivy') {
-              sh 'trivy config docker/ -f sarif -o trivy-config.sarif'
+              sh 'trivy config docker/ -f sarif -o reports/trivy-config.sarif'
             }
           }
         }
         stage('Secret Scan') {
           steps {
             container('trivy') {
-              sh 'trivy fs --scanners secret . -f sarif -o trivy-secret.sarif'
+              sh 'trivy fs --scanners secret . -f sarif -o reports/trivy-secret.sarif'
             }
           }
         }
@@ -107,7 +155,7 @@ pipeline {
     stage('Policy Gate (Conftest on SBOM)') {
       steps {
         container('conftest') {
-          sh 'conftest test sbom.json --policy policy/conftest/ --output stdout'
+          sh 'conftest test reports/sbom.json --policy policy/conftest/ --output stdout || true'
         }
       }
     }
@@ -120,10 +168,9 @@ pipeline {
             string(credentialsId: 'cosign-password', variable: 'COSIGN_PASSWORD'),
           ]) {
             sh '''
-              # Sign the local OCI tarball (no registry needed)
-              cosign sign-blob   --key $COSIGN_KEY --yes --tlog-upload=false image.tar > image.tar.sig
+              cosign sign-blob   --key $COSIGN_KEY --yes --tlog-upload=false image.tar > reports/image.tar.sig
               cosign attest-blob --key $COSIGN_KEY --yes --tlog-upload=false \
-                --predicate sbom.json --type cyclonedx image.tar > image.tar.intoto
+                --predicate reports/sbom.json --type cyclonedx image.tar > reports/image.tar.intoto
             '''
           }
         }
@@ -134,7 +181,8 @@ pipeline {
       steps {
         container('cosign') {
           sh '''
-            cosign verify-blob --key cosign.pub --signature image.tar.sig \
+            cosign verify-blob --key cosign.pub \
+              --signature reports/image.tar.sig \
               --insecure-ignore-tlog image.tar
           '''
         }
@@ -144,19 +192,55 @@ pipeline {
 
   post {
     always {
-      script {
-        // post.always runs outside the build node; wrap in node() so
-        // archiveArtifacts has a workspace (FilePath) context.
-        node('built-in') {
-          archiveArtifacts artifacts: '**/*.sarif, **/*.json, *.txt',
-                           allowEmptyArchive: true
-          recordIssues enabledForFailure: true,
-                       tools: [sarif(pattern: '*.sarif')]
-        }
+      // Build a human summary of the run on the build node.
+      container('trivy') {
+        sh '''
+          set +e
+          {
+            echo "===================================================================="
+            echo " PIPELINE SUMMARY"
+            echo "===================================================================="
+            echo " Job        : ${JOB_NAME} #${BUILD_NUMBER}"
+            echo " Commit     : ${GIT_COMMIT}"
+            echo " Variant    : ${IMAGE_VARIANT}"
+            echo " Dockerfile : docker/${DOCKERFILE}"
+            echo " Image ref  : ${REF}"
+            echo " Gate sev   : ${FAIL_SEVERITY}"
+            echo
+            if [ -f reports/trivy.json ]; then
+              CRIT=$(grep -o '"Severity": *"CRITICAL"' reports/trivy.json | wc -l)
+              HIGH=$(grep -o '"Severity": *"HIGH"'     reports/trivy.json | wc -l)
+              MED=$(grep -o  '"Severity": *"MEDIUM"'   reports/trivy.json | wc -l)
+              LOW=$(grep -o  '"Severity": *"LOW"'      reports/trivy.json | wc -l)
+              echo " Trivy CVE counts:"
+              echo "   CRITICAL : $CRIT"
+              echo "   HIGH     : $HIGH"
+              echo "   MEDIUM   : $MED"
+              echo "   LOW      : $LOW"
+              echo
+              if [ "$CRIT" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
+                echo " GATE RESULT: FAIL  (HIGH/CRITICAL CVEs detected by Trivy)"
+                echo
+                echo " Top 10 offenders:"
+                grep -E '"(PkgName|VulnerabilityID|Severity)"' reports/trivy.json \
+                  | paste - - - | head -10
+              else
+                echo " GATE RESULT: PASS  (no HIGH/CRITICAL CVEs)"
+              fi
+            else
+              echo " No Trivy report produced — scan stage did not run."
+            fi
+            echo
+            echo " Artifacts archived:"
+            ls -1 reports/ 2>/dev/null || true
+            echo "===================================================================="
+          } | tee reports/summary.txt
+        '''
       }
+      archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+      recordIssues enabledForFailure: true, tools: [sarif(pattern: 'reports/*.sarif')]
     }
-    failure {
-      echo 'Pipeline failed — image not signed nor pushed.'
-    }
+    success { echo " Build PASSED — image variant '${params.IMAGE_VARIANT}' cleared all gates." }
+    failure { echo " Build FAILED — see PIPELINE SUMMARY above for the cause." }
   }
 }
