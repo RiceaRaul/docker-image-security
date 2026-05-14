@@ -20,10 +20,11 @@ WORKDIR /app
 COPY . /app
 
 # B5 — uv unpinned, then install the vulnerable pinned set from pyproject
-RUN pip install uv && uv pip install --system --no-cache .
+RUN pip install uv && uv pip install --system --no-cache ./app
 
 # B6 / B7 — runs as root, no HEALTHCHECK
 EXPOSE 5000
+WORKDIR /app/app
 
 # B8 — shell-form CMD
 CMD python -m app
