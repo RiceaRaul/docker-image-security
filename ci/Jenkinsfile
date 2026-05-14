@@ -16,7 +16,7 @@ pipeline {
     IMAGE         = "${REGISTRY}/secapp"
     TAG           = "${env.GIT_COMMIT?.take(8) ?: 'dev'}"
     REF           = "${IMAGE}:${TAG}"
-    BUILDKIT_ADDR = 'unix:///run/user/1000/buildkit/buildkitd.sock'
+    BUILDKIT_ADDR = 'unix:///run/buildkit/buildkitd.sock'
   }
 
   options {
@@ -39,7 +39,7 @@ pipeline {
       }
     }
 
-    stage('Build (BuildKit rootless)') {
+    stage('Build (BuildKit)') {
       steps {
         container('buildkit') {
           sh '''
@@ -144,8 +144,16 @@ pipeline {
 
   post {
     always {
-      archiveArtifacts artifacts: '**/*.sarif, **/*.json, *.txt', allowEmptyArchive: true
-      recordIssues enabledForFailure: true, tools: [sarif(pattern: '*.sarif')]
+      script {
+        // post.always runs outside the build node; wrap in node() so
+        // archiveArtifacts has a workspace (FilePath) context.
+        node('built-in') {
+          archiveArtifacts artifacts: '**/*.sarif, **/*.json, *.txt',
+                           allowEmptyArchive: true
+          recordIssues enabledForFailure: true,
+                       tools: [sarif(pattern: '*.sarif')]
+        }
+      }
     }
     failure {
       echo 'Pipeline failed — image not signed nor pushed.'
