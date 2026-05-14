@@ -46,16 +46,35 @@ spec:
       command: ["sleep", "infinity"]
       volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
 
-    # ---- Syft (chainguard -dev variant) ----
+    # ---- Syft (alpine + install on start) ----
     - name: syft
-      image: cgr.dev/chainguard/syft:latest-dev
-      command: ["sleep", "infinity"]
+      image: alpine:3.20
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          apk add --no-cache curl ca-certificates >/dev/null
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin v1.5.0
+          syft version
+          sleep infinity
       volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
 
-    # ---- Cosign (chainguard -dev variant) ----
+    # ---- Cosign (alpine + install on start) ----
     - name: cosign
-      image: cgr.dev/chainguard/cosign:latest-dev
-      command: ["sleep", "infinity"]
+      image: alpine:3.20
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          apk add --no-cache curl ca-certificates >/dev/null
+          curl -sSfL -o /usr/local/bin/cosign \
+            https://github.com/sigstore/cosign/releases/download/v2.2.4/cosign-linux-amd64
+          chmod +x /usr/local/bin/cosign
+          cosign version
+          sleep infinity
       volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
 
     # ---- Conftest (instrumenta image is alpine) ----
