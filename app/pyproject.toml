@@ -1,0 +1,44 @@
+[project]
+name = "secapp"
+version = "0.1.0"
+description = "Intentionally vulnerable Flask app for Docker security demo"
+authors = [{ name = "Ricea Ion Raul", email = "raul.ricea@stud.univ-ovidius.ro" }]
+requires-python = ">=3.12"
+readme = "README.md"
+
+# NOTE: pinned-old versions chosen on purpose for the "bad" Dockerfile demo.
+# The hardened build uses [project.optional-dependencies.secure] with patched versions.
+dependencies = [
+    "flask==2.0.1",
+    "werkzeug==2.0.1",
+    "jinja2==3.0.1",
+    "itsdangerous==2.0.1",
+    "requests==2.25.1",
+    "pyyaml==5.3.1",
+    "gunicorn==20.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "httpx>=0.27",
+    "ruff>=0.5",
+]
+
+# Hardened deps are NOT declared here on purpose — they override the
+# intentionally-old base pins. The hardened Docker image installs them
+# directly via `uv pip install` (see docker/Dockerfile). For local upgrade
+# preview, run: `uv pip compile docker/requirements.secure.in`.
+
+[project.scripts]
+secapp = "app.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[tool.uv]
+package = true

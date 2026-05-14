@@ -1,0 +1,25 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-cosign-signature
+spec:
+  validationFailureAction: Enforce
+  webhookTimeoutSeconds: 30
+  rules:
+    - name: verify-secapp-images
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [secure-app]
+      verifyImages:
+        - imageReferences:
+            - "registry.sec-lab.local/secapp:*"
+          attestors:
+            - count: 1
+              entries:
+                - keys:
+                    publicKeys: |-
+                      -----BEGIN PUBLIC KEY-----
+                      REPLACE_WITH_COSIGN_PUB
+                      -----END PUBLIC KEY-----

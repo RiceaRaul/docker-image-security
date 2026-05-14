@@ -1,0 +1,22 @@
+# INTENTIONALLY INSECURE BASELINE — DO NOT USE IN PRODUCTION
+# Demonstrates anti-patterns scanned by hadolint / trivy / dockle.
+
+FROM python:latest
+
+# B1: ENV secret bakes into image layer (visible via `docker history`)
+ENV API_KEY=sk-DEMO-LEAKED-abc123def456
+
+WORKDIR /app
+
+# B2: copy whole context (leaks .git, tests, .env if present)
+COPY . /app
+
+# B3: install via pip without --no-cache-dir, no version pin on tooling
+RUN pip install uv && uv pip install --system --no-cache .
+
+# B4: runs as root (no USER directive)
+# B5: no HEALTHCHECK
+# B6: shell form CMD, base tag is :latest (mutable)
+
+EXPOSE 5000
+CMD python -m app

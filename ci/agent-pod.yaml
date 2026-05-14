@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    jenkins/agent: docker-sec
+spec:
+  serviceAccountName: jenkins-builder
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: jnlp
+      image: jenkins/inbound-agent:latest-jdk17
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits:   { cpu: 500m, memory: 512Mi }
+    - name: buildkit
+      image: moby/buildkit:v0.13.2-rootless
+      args:
+        - --addr
+        - unix:///run/user/1000/buildkit/buildkitd.sock
+        - --oci-worker-no-process-sandbox
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: { type: Unconfined }
+        capabilities: { drop: ["ALL"] }
+      volumeMounts:
+        - { name: buildkitd, mountPath: /run/user/1000/buildkit }
+        - { name: workspace, mountPath: /home/jenkins/agent }
+    - name: trivy
+      image: aquasec/trivy:0.50.0
+      command: ["sleep", "infinity"]
+      env:
+        - { name: TRIVY_CACHE_DIR, value: /tmp/.trivy }
+      securityContext:
+        capabilities: { drop: ["ALL"] }
+        readOnlyRootFilesystem: true
+      volumeMounts:
+        - { name: trivy-cache, mountPath: /tmp/.trivy }
+        - { name: workspace,   mountPath: /home/jenkins/agent }
+    - name: grype
+      image: anchore/grype:v0.78.0
+      command: ["sleep", "infinity"]
+      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+    - name: syft
+      image: anchore/syft:v1.5.0
+      command: ["sleep", "infinity"]
+      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+    - name: cosign
+      image: gcr.io/projectsigstore/cosign:v2.2.4
+      command: ["sleep", "infinity"]
+      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+    - name: conftest
+      image: openpolicyagent/conftest:v0.55.0
+      command: ["sleep", "infinity"]
+      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+    - name: hadolint
+      image: hadolint/hadolint:v2.12.0-alpine
+      command: ["sleep", "infinity"]
+      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+    - name: kubectl
+      image: bitnami/kubectl:1.30
+      command: ["sleep", "infinity"]
+      volumeMounts: [{ name: workspace, mountPath: /home/jenkins/agent }]
+  volumes:
+    - { name: buildkitd,   emptyDir: {} }
+    - { name: workspace,   emptyDir: {} }
+    - { name: trivy-cache, emptyDir: {} }

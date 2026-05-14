@@ -1,0 +1,165 @@
+// Jenkins declarative pipeline — Docker image security
+// Scope: build, scan, SBOM, sign, push. No runtime deploy.
+// Agent: dynamic K8s pod (see ci/agent-pod.yaml).
+// Author: Ricea Ion Raul (CSML, Software Security)
+
+pipeline {
+  agent {
+    kubernetes {
+      yamlFile 'ci/agent-pod.yaml'
+      defaultContainer 'jnlp'
+    }
+  }
+
+  environment {
+    REGISTRY      = 'registry.sec-lab.local'
+    IMAGE         = "${REGISTRY}/secapp"
+    TAG           = "${env.GIT_COMMIT?.take(8) ?: 'dev'}"
+    REF           = "${IMAGE}:${TAG}"
+    BUILDKIT_ADDR = 'unix:///run/user/1000/buildkit/buildkitd.sock'
+  }
+
+  options {
+    timestamps()
+    ansiColor('xterm')
+    timeout(time: 30, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+  }
+
+  stages {
+    stage('Lint Dockerfile') {
+      steps {
+        container('hadolint') {
+          sh '''
+            hadolint docker/Dockerfile     -f sarif > hadolint-good.sarif || true
+            hadolint docker/Dockerfile.bad -f sarif > hadolint-bad.sarif  || true
+            hadolint docker/Dockerfile
+          '''
+        }
+      }
+    }
+
+    stage('Build (BuildKit rootless)') {
+      steps {
+        container('buildkit') {
+          sh '''
+            buildctl --addr ${BUILDKIT_ADDR} build \
+              --frontend dockerfile.v0 \
+              --local context=. \
+              --local dockerfile=docker \
+              --opt filename=Dockerfile \
+              --output type=oci,name=${REF},dest=image.tar
+          '''
+        }
+      }
+    }
+
+    stage('SBOM') {
+      steps {
+        container('syft') {
+          sh '''
+            syft oci-archive:image.tar -o cyclonedx-json=sbom.json
+            syft oci-archive:image.tar -o spdx-json=sbom.spdx.json
+            syft oci-archive:image.tar -o table | tee sbom.txt
+          '''
+        }
+      }
+    }
+
+    stage('Scan Image') {
+      parallel {
+        stage('Trivy CVE') {
+          steps {
+            container('trivy') {
+              sh '''
+                trivy image --input image.tar \
+                  --severity HIGH,CRITICAL --exit-code 0 \
+                  -f sarif -o trivy.sarif
+                trivy image --input image.tar -f table | tee trivy.txt
+              '''
+            }
+          }
+        }
+        stage('Grype CVE') {
+          steps {
+            container('grype') {
+              sh 'grype oci-archive:image.tar -o sarif > grype.sarif'
+            }
+          }
+        }
+        stage('Trivy Misconfig') {
+          steps {
+            container('trivy') {
+              sh 'trivy config docker/ -f sarif -o trivy-config.sarif'
+            }
+          }
+        }
+        stage('Secret Scan') {
+          steps {
+            container('trivy') {
+              sh 'trivy fs --scanners secret . -f sarif -o trivy-secret.sarif'
+            }
+          }
+        }
+      }
+    }
+
+    stage('Policy Gate (Conftest on SBOM)') {
+      steps {
+        container('conftest') {
+          sh 'conftest test sbom.json --policy policy/conftest/ --output stdout'
+        }
+      }
+    }
+
+    stage('Sign + Attest (Cosign)') {
+      when { branch 'main' }
+      steps {
+        container('cosign') {
+          withCredentials([
+            file(credentialsId: 'cosign-key', variable: 'COSIGN_KEY'),
+            string(credentialsId: 'cosign-password', variable: 'COSIGN_PASSWORD'),
+          ]) {
+            sh '''
+              cosign sign   --key $COSIGN_KEY --yes ${REF}
+              cosign attest --key $COSIGN_KEY --type cyclonedx --predicate sbom.json --yes ${REF}
+            '''
+          }
+        }
+      }
+    }
+
+    stage('Push') {
+      when { branch 'main' }
+      steps {
+        container('buildkit') {
+          sh '''
+            buildctl --addr ${BUILDKIT_ADDR} build \
+              --frontend dockerfile.v0 \
+              --local context=. --local dockerfile=docker \
+              --output type=image,name=${REF},push=true
+          '''
+        }
+      }
+    }
+
+    stage('Verify Signature') {
+      when { branch 'main' }
+      steps {
+        container('cosign') {
+          sh 'cosign verify --key cosign.pub ${REF}'
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      archiveArtifacts artifacts: '**/*.sarif, **/*.json, *.txt', allowEmptyArchive: true
+      recordIssues enabledForFailure: true, tools: [sarif(pattern: '*.sarif')]
+    }
+    failure {
+      echo 'Pipeline failed — image not signed nor pushed.'
+    }
+  }
+}
